@@ -1,0 +1,68 @@
+# Daily HR update — fetches new acts published in Narodne novine and
+# commits them on top of main. Runs from the country repo itself; uses
+# the workflow's default GITHUB_TOKEN to push back (no PAT needed).
+#
+# Engine is installed from norislav/legalize-pipeline@feat/hr-fetcher.
+# State is inferred from `git log` (most recent `Source-Date:` trailer)
+# so no persistent state file is needed across runs.
+
+name: Daily HR update
+
+on:
+  schedule:
+    # 14:00 UTC, Mon–Fri (15:00/16:00 Croatia depending on DST).
+    # NN typically publishes the day's Službeni dio in the morning
+    # Croatia time; this gives a comfortable buffer.
+    - cron: "0 14 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Date to process (YYYY-MM-DD). Empty = automatic (10-day lookback cap from git history)."
+        required: false
+        type: string
+
+# One run at a time. A second cron firing while the previous is still
+# fetching would race on the push.
+concurrency:
+  group: daily-hr
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout legalize-hr (full depth for git-log state inference)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install legalize engine from feat/hr-fetcher
+        run: |
+          pip install --upgrade pip
+          pip install "git+https://github.com/norislav/legalize-pipeline.git@feat/hr-fetcher"
+
+      - name: Configure git author identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run daily pipeline
+        env:
+          INPUT_DATE: ${{ inputs.date }}
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          DATE_FLAG=""
+          if [ -n "$INPUT_DATE" ]; then
+            DATE_FLAG="--date $INPUT_DATE"
+          fi
+          legalize daily -c hr --repo-path . --push $DATE_FLAG
