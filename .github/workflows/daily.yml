@@ -1,10 +1,10 @@
 # Daily HR update — fetches new acts published in Narodne novine and
-# commits them on top of main. Runs from the country repo itself; uses
-# the workflow's default GITHUB_TOKEN to push back (no PAT needed).
+# commits them on top of main. Uses the workflow's default GITHUB_TOKEN
+# to push back to legalize-hr (no PAT needed because we're pushing to
+# the same repo the workflow runs in).
 #
-# Engine is installed from norislav/legalize-pipeline@feat/hr-fetcher.
-# State is inferred from `git log` (most recent `Source-Date:` trailer)
-# so no persistent state file is needed across runs.
+# State is inferred from the country repo's `git log` (most recent
+# `Source-Date:` trailer) so no persistent state file is needed.
 
 name: Daily HR update
 
@@ -35,27 +35,43 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout legalize-hr (full depth for git-log state inference)
+      # Country repo with full depth — the engine reads the most
+      # recent `Source-Date:` trailer to know where to resume.
+      - name: Checkout legalize-hr
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          path: country
+
+      # Engine repo. The `config.yaml` at its root carries the HR
+      # `countries:` section; the CLI loads it from cwd when invoked
+      # without `--config`.
+      - name: Checkout legalize-pipeline (engine)
+        uses: actions/checkout@v4
+        with:
+          repository: norislav/legalize-pipeline
+          ref: feat/hr-fetcher
+          path: engine
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install legalize engine from feat/hr-fetcher
+      - name: Install engine
+        working-directory: engine
         run: |
           pip install --upgrade pip
-          pip install "git+https://github.com/norislav/legalize-pipeline.git@feat/hr-fetcher"
+          pip install -e .
 
-      - name: Configure git author identity
+      - name: Configure git author identity (for commits in the country repo)
+        working-directory: country
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Run daily pipeline
+        working-directory: engine
         env:
           INPUT_DATE: ${{ inputs.date }}
           PYTHONUTF8: "1"
@@ -65,4 +81,4 @@ jobs:
           if [ -n "$INPUT_DATE" ]; then
             DATE_FLAG="--date $INPUT_DATE"
           fi
-          legalize daily -c hr --repo-path . --push $DATE_FLAG
+          legalize daily -c hr --repo-path ../country --push $DATE_FLAG
